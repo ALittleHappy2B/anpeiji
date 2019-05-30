@@ -8,7 +8,7 @@
       <p><b>地址：××市××区××路××号××大学，××楼，邮编×××</b></p>
     </td>
     <td width="25%">
-      <img src="/zhengjianzhao.jpg" width="100%">      ![证件照](https://github.com/ALittleHappy2B/anpeiji/blob/master/anpeiji.jpg)
+      <img src="/zhengjianzhao.jpg" width="100%">      ![证件照](/anpeiji.jpg)
     </td>
   </tr>
 </table>
