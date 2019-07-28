@@ -1,0 +1,271 @@
+java8，测试1g文件copy和4g文件拷贝时效率
+
+/**
+ * 4g文件，copy测试
+ */
+public class FileCopyTest extends AbstractTest {
+    private String source = "D:\\test\\bigfile.txt";
+ 
+    @Override
+    protected void head() {
+        try {
+            //创建文件,1g(1L<<30) 4g(1L<<32)
+            create(source, 1L << 30);
+            //文件复制方式第一种，stream直接buffer，1g->5s 4g->33s
+            streamCopy(source, "D:\\test\\streamCopy.txt");
+            //文件复制方式Files.copy,用户态文件copy，1g->11s 4g->40s
+            toolCopy(source, "D:\\test\\toolCopy.txt");
+            //文件复制方式Channel复制，1g->3s 4g->38s
+            channelCopy(source, "D:\\test\\channelCopy.txt");
+            //文件复制方式MappedByteBuffer复制,1g->6s 4g->42s
+            mappedByteBufferCopy(source, "D:\\test\\mappedByteBufferCopy.txt");
+            //文件复制通道RandomAccessFile,1g->3s 4g->38s
+            channelRandomCopy(source, "D:\\test\\channelRandomCopy.txt");
+            //多线程复制，跟gc和线程切换有关,1g->5s ,4g->40-60
+            multiThreadCopy(source, "D:\\test\\multiThreadCopy.txt");
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+ 
+    private void create(String target, long size) throws IOException {
+        Path path = Paths.get(target);
+        if (Files.isDirectory(path)) {
+            throw new IOException("不是有效的文件" + target);
+        }
+        if (Files.exists(path)) {
+            Files.delete(path);
+            Files.createFile(path);
+        }
+ 
+        //512m
+        long stepLength = 1L << 29;
+        long cur = 0L;
+        MappedByteBuffer mappedByteBuffer;
+        Random random = new Random();
+        while (cur < size) {
+            mappedByteBuffer = new RandomAccessFile(target, "rw").getChannel()
+                    .map(FileChannel.MapMode.READ_WRITE, cur, stepLength);
+            IntBuffer intBuffer = mappedByteBuffer.asIntBuffer();
+            while (intBuffer.position() < intBuffer.capacity()) {
+                intBuffer.put(random.nextInt());
+            }
+            cur += stepLength;
+        }
+    }
+ 
+    private void multiThreadCopy(String source, String target) throws IOException {
+        long start = System.currentTimeMillis();
+        RandomAccessFile in = new RandomAccessFile(source, "r");
+        RandomAccessFile out = new RandomAccessFile(target, "rw");
+ 
+        ExecutorService executorService = Executors.newFixedThreadPool(4);
+        long size = in.length();
+        //512m
+        long stepLength = 1L << 29;
+        int partition = (int) (size / stepLength);
+        System.out.println("分块：" + partition);
+        System.out.println("步长：" + FileUtils.size(stepLength));
+        CountDownLatch countDownLatch = new CountDownLatch(partition);
+        FileChannel fileChannel = in.getChannel();
+        for (int i = 0; i < partition; i++) {
+            long cur = i * stepLength;
+            executorService.execute(new CopyTask(fileChannel, cur, stepLength, out, countDownLatch));
+        }
+        try {
+            countDownLatch.await();
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        executorService.shutdown();
+        long end = System.currentTimeMillis();
+        System.out.println("multiThreadCopy耗时:" + (end - start) / 1000L);
+    }
+ 
+    private static class CopyTask implements Runnable {
+        private long cur;
+        private RandomAccessFile out;
+        private CountDownLatch countDownLatch;
+        private FileChannel fileChannel;
+        private long stepLength;
+ 
+        public CopyTask(FileChannel fileChannel, long cur, long stepLength, RandomAccessFile out, CountDownLatch countDownLatch) {
+            this.cur = cur;
+            this.out = out;
+            this.countDownLatch = countDownLatch;
+            this.stepLength = stepLength;
+            this.fileChannel = fileChannel;
+        }
+ 
+        @Override
+        public void run() {
+            try {
+                MappedByteBuffer mappedByteBuffer = fileChannel.map(FileChannel.MapMode.READ_ONLY, cur, stepLength);
+                out.getChannel().write(mappedByteBuffer, cur);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            countDownLatch.countDown();
+        }
+    }
+ 
+    /**
+     * mappedByteBuffer,涉及到GC，空间没有重复使用
+     *
+     * @throws IOException
+     */
+    private void mappedByteBufferCopy(String source, String target) throws IOException {
+        long start = System.currentTimeMillis();
+        RandomAccessFile in = new RandomAccessFile(source, "r");
+        RandomAccessFile out = new RandomAccessFile(target, "rw");
+        MappedByteBuffer inMappedByteBuffer;
+ 
+        long cur = 0L;
+        long stepLength = 1L << 29;
+        while (cur < in.length()) {
+            inMappedByteBuffer =
+                    in.getChannel().map(FileChannel.MapMode.READ_ONLY, cur, stepLength);
+            out.getChannel().write(inMappedByteBuffer, cur);
+            cur += stepLength;
+        }
+        long end = System.currentTimeMillis();
+        System.out.println("channelCopy耗时:" + (end - start) / 1000L);
+    }
+ 
+    /**
+     * 理论上是最快的
+     *
+     * @throws IOException
+     */
+    private void channelCopy(String source, String target) throws IOException {
+        long start = System.currentTimeMillis();
+        File in = new File(source);
+        FileInputStream fileInputStream = new FileInputStream(in);
+        File out = new File(target);
+        if (!out.exists()) {
+            out.createNewFile();
+        }
+        FileOutputStream fileOutputStream = new FileOutputStream(out);
+        long fileLength = in.length();
+        long cur = 0L;
+        //1G
+        long stepLength = 1L << 30;
+        while (cur < fileLength) {
+            fileInputStream.getChannel().transferTo(cur, stepLength, fileOutputStream.getChannel());
+            cur += stepLength;
+        }
+        fileInputStream.close();
+        fileOutputStream.close();
+        long end = System.currentTimeMillis();
+        System.out.println("channelCopy耗时:" + (end - start) / 1000L);
+    }
+ 
+    /**
+     * 和直接使用file.getChannel应该是一样的
+     *
+     * @throws IOException
+     */
+    private void channelRandomCopy(String source, String target) throws IOException {
+        long start = System.currentTimeMillis();
+        RandomAccessFile in = new RandomAccessFile(source, "r");
+        RandomAccessFile out = new RandomAccessFile(target, "rw");
+        long fileLength = in.length();
+        long cur = 0L;
+        long stepLength = 1L << 30;
+        while (cur < fileLength) {
+            in.getChannel().transferTo(cur, stepLength, out.getChannel());
+            cur += stepLength;
+        }
+        in.close();
+        out.close();
+        long end = System.currentTimeMillis();
+        System.out.println("channelRandomCopy耗时:" + (end - start) / 1000L);
+    }
+ 
+    /**
+     * 直接调用底层C++代码复制，用户态-内核态切换
+     *
+     * @throws IOException
+     */
+    private void toolCopy(String source, String target) throws IOException {
+        long start = System.currentTimeMillis();
+        File out = new File(target);
+        FileOutputStream fileOutputStream = new FileOutputStream(out);
+        Files.copy(Paths.get(source), fileOutputStream);
+        fileOutputStream.close();
+        long end = System.currentTimeMillis();
+        System.out.println("toolCopy耗时:" + (end - start) / 1000L);
+    }
+ 
+    /**
+     * 分析，重复使用buffer，没有gc
+     *
+     * @throws IOException
+     */
+    private void streamCopy(String source, String target) throws IOException {
+        long start = System.currentTimeMillis();
+        File in = new File(source);
+        FileInputStream fileInputStream = new FileInputStream(in);
+ 
+        File out = new File(target);
+        if (!out.exists()) {
+            out.createNewFile();
+        }
+        FileOutputStream fileOutputStream = new FileOutputStream(out);
+        //1M
+        byte[] buffer = new byte[1 << 20];
+        int length;
+        while ((length = fileInputStream.read(buffer)) != -1) {
+            fileOutputStream.write(buffer, 0, length);
+        }
+        fileOutputStream.flush();
+        fileOutputStream.close();
+        fileInputStream.close();
+        long end = System.currentTimeMillis();
+        System.out.println("streamCopy耗时:" + (end - start) / 1000L);
+    }
+ 
+    private static class FileUtils {
+        private static final long B = 1024L;
+        private static final long K = 1048576L;
+        private static final long M = 1073741824L;
+        private static final long G = 1099511627776L;
+        private static final long T = 1125899906842624L;
+        private static final long P = 1152921504606846976L;
+ 
+        /**
+         * 单位换算，（这里如果想用stringbuilder来appen也是可以的
+         * ，如果您javap 命令反编译出class文件，会发现其实底层优化，自动使用了stringbuilder）
+         *
+         * @param size
+         * @return
+         */
+        public static String size(long size) {
+            DecimalFormat df = new DecimalFormat("#.00");
+            String fileSizeString = "";
+            String kSize = df.format((double) size / B) + "K";
+            if (size < B) {
+                fileSizeString = kSize + "(" + df.format((double) size) + "B" + ")";
+            } else if (size < K) {
+                fileSizeString = df.format((double) size / B) + "K";
+            } else if (size < M) {
+                fileSizeString = kSize + "(" + df.format((double) size / K) + "M" + ")";
+            } else if (size < G) {
+                fileSizeString = kSize + "(" + df.format((double) size / M) + "G" + ")";
+            } else if (size < T) {
+                fileSizeString = kSize + "(" + df.format((double) size / G) + "T)";
+            } else if (size < P) {
+                fileSizeString = kSize + "(" + df.format((double) size / T) + "P)";
+            } else {
+                fileSizeString = kSize + "(" + df.format((double) size / P) + "E)";
+            }
+            return fileSizeString;
+        }
+    }
+}
+ 
+
+--------------------- 
+作者：zoQ 
+来源：CSDN 
+原文：https://blog.csdn.net/bpz31456/article/details/82286694 
