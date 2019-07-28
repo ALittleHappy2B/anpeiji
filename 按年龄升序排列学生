@@ -1,0 +1,64 @@
+class Student {
+
+  private String name;
+  private int age;
+
+  public String getName() {
+    return name;
+  }
+
+  public void setName(String name) {
+    this.name = name;
+  }
+
+  public int getAge() {
+    return age;
+  }
+
+  public void setAge(int age) {
+    this.age = age;
+  }
+}
+
+class StudentConparor implements Comparator<Student> {
+  @Override
+  public int compare(Student o1, Student o2) {
+    if(o1.getAge() > o2.getAge()){
+      return 1;
+    }else{
+      return -1;
+    }
+
+  }
+}
+public class StudentSort {
+
+  public static void main(String[] args) {
+
+    List<Student> studentList =new ArrayList<Student>();
+
+    Student student1 = new Student();
+    student1.setName("aaa");
+    student1.setAge(1);
+
+    Student student2 = new Student();
+    student2.setName("bbb");
+    student2.setAge(2);
+
+    Student student3 = new Student();
+    student3.setName("ccc");
+    student3.setAge(3);
+
+    studentList.add(student2);
+    studentList.add(student1);
+    studentList.add(student3);
+
+    Collections.sort(studentList , new StudentConparor() );
+
+
+    for(int i = 0 ; i < studentList.size() ; i ++ ){
+      Student student = studentList.get(i);
+      System.out.println(student.getName());
+    }
+  }
+}
